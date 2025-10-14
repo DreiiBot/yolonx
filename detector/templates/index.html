@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>YOLO Local Trainer</title>
+</head>
+<body>
+<h1>YOLO Local Trainer (No Database)</h1>
+<form action="/train/" method="post">
+{% csrf_token %}
+<label>Path to data.yaml: <input name="data_yaml" required></label><br>
+<label>Epochs: <input name="epochs" value="50"></label><br>
+<label>Image size: <input name="imgsz" value="640"></label><br>
+<label>Batch size: <input name="batch" value="16"></label><br>
+<button type="submit">Start Training</button>
+</form>
+</body>
+</html>

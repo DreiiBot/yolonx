@@ -4,8 +4,8 @@ import threading
 from ultralytics import YOLO
 
 # --- Configuration ---
-CAMERA_SRC = "rtsp://192.168.31.120:8080/h264_ulaw.sdp"  # update with your phone/cam URL
-MODEL_PATH = "best.pt"  # supports both detection and segmentation models (e.g., best-seg.pt)
+CAMERA_SRC = "rtsp://192.168.31.120:8080/h264_ulaw.sdp"
+MODEL_PATH = "best.pt"  # can be detection or segmentation model (e.g., yolov8n.pt or yolov8n-seg.pt)
 IMG_SIZE = 640
 
 # --- Global Variables ---
@@ -15,14 +15,14 @@ frame_lock = threading.Lock()
 
 
 def capture_and_detect():
-    """
-    Continuously captures frames from the camera and runs YOLO detection/segmentation.
-    """
     global latest_frame, detections
 
-    # Load YOLO model (automatically detects if segmentation)
     model = YOLO(MODEL_PATH)
-    is_segmentation = model.task == "segment"
+
+    # detect if this is a segmentation model
+    is_segmentation = any("seg" in k for k in model.names.keys()) if hasattr(model, "names") else ("seg" in MODEL_PATH)
+    # or more reliably:
+    is_segmentation = getattr(model, "task", "") == "segment"
 
     cap = cv2.VideoCapture(CAMERA_SRC)
     if not cap.isOpened():
@@ -39,12 +39,22 @@ def capture_and_detect():
             continue
 
         # Run inference
-        results = model(frame, imgsz=IMG_SIZE, verbose=False)[0]
+        results_list = model(frame, imgsz=IMG_SIZE, verbose=False)
+        if not results_list:
+            continue
 
-        # Plot annotated frame (works for both detection + segmentation)
-        annotated = results.plot()
+        results = results_list[0]
 
-        # Encode as JPEG for streaming
+        # Ensure visualization works for all model types
+        if hasattr(results, "plot"):
+            annotated = results.plot()  # draws boxes or masks automatically
+        else:
+            annotated = frame
+
+        if annotated is None or annotated.size == 0:
+            annotated = frame  # fallback to original frame
+
+        # Encode frame to JPEG
         success, jpeg = cv2.imencode(".jpg", annotated)
         if not success:
             continue
@@ -53,20 +63,8 @@ def capture_and_detect():
             latest_frame = jpeg.tobytes()
             detections = []
 
-            # Handle detections or segmentation masks
-            if is_segmentation and results.masks is not None:
-                for idx, mask in enumerate(results.masks.data):
-                    label = model.names[int(results.boxes.cls[idx])] if results.boxes is not None else "object"
-                    confidence = float(results.boxes.conf[idx]) if results.boxes is not None else 0.0
-                    xyxy = results.boxes.xyxy[idx].tolist() if results.boxes is not None else []
-                    detections.append({
-                        "label": label,
-                        "confidence": confidence,
-                        "xyxy": xyxy,
-                        "mask_points": results.masks.xy[idx].tolist()  # list of polygon points
-                    })
-
-            elif results.boxes is not None:  # regular detection
+            # --- Collect detections ---
+            if hasattr(results, "boxes") and results.boxes is not None:
                 for box in results.boxes:
                     detections.append({
                         "label": model.names[int(box.cls)],
@@ -74,11 +72,33 @@ def capture_and_detect():
                         "xyxy": box.xyxy[0].tolist()
                     })
 
+            # --- Collect segmentation masks if available ---
+            if hasattr(results, "masks") and results.masks is not None:
+                for idx, mask in enumerate(results.masks.data):
+                    label = (
+                        model.names[int(results.boxes.cls[idx])]
+                        if hasattr(results, "boxes") and results.boxes is not None
+                        else "object"
+                    )
+                    confidence = (
+                        float(results.boxes.conf[idx])
+                        if hasattr(results, "boxes") and results.boxes is not None
+                        else 0.0
+                    )
+                    xyxy = (
+                        results.boxes.xyxy[idx].tolist()
+                        if hasattr(results, "boxes") and results.boxes is not None
+                        else []
+                    )
+                    detections.append({
+                        "label": label,
+                        "confidence": confidence,
+                        "xyxy": xyxy,
+                        "mask_points": results.masks.xy[idx].tolist()
+                    })
+
 
 def mjpeg_generator():
-    """
-    Generator for MJPEG streaming endpoint.
-    """
     global latest_frame
     while True:
         with frame_lock:
@@ -89,5 +109,5 @@ def mjpeg_generator():
         time.sleep(0.05)
 
 
-# Start background capture thread
+# Start background thread
 threading.Thread(target=capture_and_detect, daemon=True).start()

@@ -150,7 +150,7 @@ class TrainModelView(APIView):
         run_name = os.path.splitext(os.path.basename(yaml_path))[0]
         run_dir = os.path.join(RUNS_DIR, run_name)
 
-        model = YOLO("yolov8n.pt")
+        model = YOLO("yolov8n-seg.pt")
         model.train(data=yaml_path, epochs=epochs, imgsz=imgsz, batch=batch, device=device, project=run_dir)
 
         return Response({
